@@ -29,5 +29,3 @@ gen
 # Go workspace file
 go.work
 
-logs
-logs/*
