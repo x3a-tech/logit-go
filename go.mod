@@ -5,7 +5,7 @@ go 1.24.1
 require (
 	github.com/getsentry/sentry-go v0.31.1
 	github.com/google/uuid v1.6.0
-	github.com/x3a-tech/configo v1.0.0
+	github.com/x3a-tech/configo v1.1.5
 	github.com/x3a-tech/envo v1.0.0
 	go.uber.org/zap v1.27.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
