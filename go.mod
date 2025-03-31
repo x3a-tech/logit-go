@@ -1,6 +1,6 @@
 module github.com/x3a-tech/logit-go
 
-go 1.23.1
+go 1.24.1
 
 require (
 	github.com/getsentry/sentry-go v0.31.1
