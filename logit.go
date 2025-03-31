@@ -122,29 +122,32 @@ func NewNopLogger() Logger {
 
 // Debug - логирование отладочной информации
 func (receiver *logIt) Debug(fields ...interface{}) {
-	fmt.Println(strings.Repeat("-", 80))
+	builder := strings.Builder{}
+	builder.WriteString("\n")
 
-	debugTime := time.Now().Format("2006-01-02 15:04:05")
-	fmt.Printf("[DEBUG] %s\n", debugTime)
+	//debugTime := time.Now().Format("2006-01-02 15:04:05")
+	//builder.WriteString(fmt.Sprintf("[DEBUG] %s\n", debugTime))
 
 	for i, field := range fields {
 		switch v := field.(type) {
 		case string:
-			fmt.Printf("Поле %d: %s\n", i, v)
+			builder.WriteString(fmt.Sprintf("Поле %d: %s\n", i, v))
 		case int, int32, int64:
-			fmt.Printf("Поле %d: %d\n", i, v)
+			builder.WriteString(fmt.Sprintf("Поле %d: %d\n", i, v))
 		case float32, float64:
-			fmt.Printf("Поле %d: %f\n", i, v)
+			builder.WriteString(fmt.Sprintf("Поле %d: %f\n", i, v))
 		case bool:
-			fmt.Printf("Поле %d: %t\n", i, v)
+			builder.WriteString(fmt.Sprintf("Поле %d: %t\n", i, v))
 		case error:
-			fmt.Printf("Поле %d (ошибка): %s\n", i, v.Error())
+			builder.WriteString(fmt.Sprintf("Поле %d (ошибка): %s\n", i, v.Error()))
 		default:
-			fmt.Printf("Поле %d: %+v\n", i, v)
+			builder.WriteString(fmt.Sprintf("Поле %d: %+v\n", i, v))
 		}
 	}
 
-	fmt.Println(strings.Repeat("-", 80))
+	builder.WriteString("\n")
+
+	receiver.logger.Debug(builder.String())
 }
 
 func (receiver *logIt) Info(ctx context.Context, message string, fields ...zap.Field) {
@@ -163,7 +166,7 @@ func (receiver *logIt) Infof(ctx context.Context, message string, a ...any) {
 	op := receiver.getOpFromContext(ctx)
 	traceId := receiver.getTraceIdFromContext(ctx)
 	receiver.logger.Info(
-		fmt.Sprintf(message, a),
+		fmt.Sprintf(message, a...),
 		append([]zap.Field{
 			zap.String("op", op),
 			zap.String("traceId", traceId),
@@ -188,7 +191,7 @@ func (receiver *logIt) Warnf(ctx context.Context, message string, a ...any) {
 	op := receiver.getOpFromContext(ctx)
 	traceId := receiver.getTraceIdFromContext(ctx)
 	receiver.logger.Warn(
-		fmt.Sprintf(message, a),
+		fmt.Sprintf(message, a...),
 		append([]zap.Field{
 			zap.String("op", op),
 			zap.String("traceId", traceId),
