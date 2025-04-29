@@ -43,7 +43,7 @@ func MustNewLogger(appConf *configo.App, loggerConf *configo.Logger, senConf *co
 		NameKey:  "logger",
 		//CallerKey:      "caller",
 		MessageKey:     "msg",
-		StacktraceKey:  "traceId",
+		StacktraceKey:  "stacktrace",
 		LineEnding:     zapcore.DefaultLineEnding,
 		EncodeLevel:    zapcore.CapitalColorLevelEncoder,
 		EncodeTime:     zapcore.TimeEncoderOfLayout(loggerConf.TimeFormat),
