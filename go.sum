@@ -31,8 +31,8 @@ github.com/stretchr/testify v1.8.2 h1:+h33VjcLVPDHtOdpUCuF+7gSuG3yGIftsP1YvFihtJ
 github.com/stretchr/testify v1.8.2/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
 github.com/x3a-tech/configo v1.1.6 h1:SKUvU5e2N+dF8ISZ1Eq6uCOib0cKiDFq1APaJ0siiEk=
 github.com/x3a-tech/configo v1.1.6/go.mod h1:PPVSkwWJNhDxBJjIB3B7aHuhp58DrzJX8PhGg029lyU=
-github.com/x3a-tech/envo v1.0.0 h1:h7YBcj+K08QiMs2RamUcI1nn4xe+tBLWAssISeP2Xd0=
-github.com/x3a-tech/envo v1.0.0/go.mod h1:s4i8nYbDfOqERwTyeLdekoyXSzpH0joMZvhFi2opimw=
+github.com/x3a-tech/envo v1.0.1 h1:vyBW/dCA+spQDTusfIgj4zcbYG3Ju5+OYAJotAarjEg=
+github.com/x3a-tech/envo v1.0.1/go.mod h1:ApAnn5UIJ2QV/z8LUa1NIWjI+f7x8w9dbhToQwJGroQ=
 go.uber.org/goleak v1.3.0 h1:2K3zAYmnTNqV73imy9J1T3WC+gmCePx2hEGkimedGto=
 go.uber.org/goleak v1.3.0/go.mod h1:CoHD4mav9JJNrW/WLlf7HGZPjdw8EucARQHekz1X6bE=
 go.uber.org/multierr v1.11.0 h1:blXXJkSxSSfBVBlC76pxqeO+LN3aDfLQo+309xJstO0=
