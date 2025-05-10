@@ -6,7 +6,6 @@ import (
 	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/x3a-tech/configo"
-	"github.com/x3a-tech/envo"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -16,12 +15,20 @@ import (
 	"time"
 )
 
+type contextKey string
+
+const (
+	opKey      contextKey = "op"
+	traceIDKey contextKey = "traceId"
+)
+
 type logIt struct {
 	logger *zap.Logger
 }
 
+// Logger определяет интерфейс для логгера.
 type Logger interface {
-	Debug(fields ...interface{})
+	Debug(ctx context.Context, message string, fields ...zap.Field) // Изменена сигнатура
 	Info(ctx context.Context, message string, fields ...zap.Field)
 	Infof(ctx context.Context, message string, a ...any)
 	Warn(ctx context.Context, message string, fields ...zap.Field)
@@ -30,83 +37,150 @@ type Logger interface {
 	Errorf(ctx context.Context, format string, args ...interface{})
 	Fatal(ctx context.Context, err error, fields ...zap.Field)
 	Fatalf(ctx context.Context, format string, args ...interface{})
-	NewCtx(ctx context.Context, op string, traceId *string) context.Context
+	NewCtx(ctx context.Context, op string, traceID *string) context.Context
 	NewOpCtx(ctx context.Context, op string) context.Context
-	NewTraceCtx(ctx context.Context, traceId *string) context.Context
-	NewTraceContext(traceId *string) context.Context
+	NewTraceCtx(ctx context.Context, traceID *string) context.Context
+	NewTraceContext(traceID *string) context.Context
 }
 
-func MustNewLogger(appConf *configo.App, loggerConf *configo.Logger, senConf *configo.Sentry, env *envo.Env) Logger {
+// Params содержит параметры для инициализации логгера.
+type Params struct {
+	AppConf    *configo.App
+	LoggerConf *configo.Logger
+	SenConf    *configo.Sentry
+	Env        *configo.Env // Убедитесь, что configo.Env существует и имеет метод IsLocal()
+}
+
+// MustNewLogger создает новый экземпляр Logger.
+// Паникует, если конфигурация некорректна или отсутствуют обязательные параметры.
+func MustNewLogger(params *Params) Logger {
+	if params == nil {
+		panic("logger: параметры инициализации (params) не могут быть nil")
+	}
+	if params.AppConf == nil {
+		panic("logger: конфигурация приложения (AppConf) не может быть nil")
+	}
+	if params.LoggerConf == nil {
+		panic("logger: конфигурация логгера (LoggerConf) не может быть nil")
+	}
+	if params.Env == nil {
+		panic("logger: конфигурация окружения (Env) не может быть nil")
+	}
+
 	encoderConfig := zapcore.EncoderConfig{
-		TimeKey:  "time",
-		LevelKey: "level",
-		NameKey:  "logger",
-		//CallerKey:      "caller",
+		TimeKey:        "time",
+		LevelKey:       "level",
+		NameKey:        "logger",
 		MessageKey:     "msg",
-		StacktraceKey:  "stacktrace",
+		StacktraceKey:  "stacktrace", // Ключ для стектрейса
 		LineEnding:     zapcore.DefaultLineEnding,
-		EncodeLevel:    zapcore.CapitalColorLevelEncoder,
-		EncodeTime:     zapcore.TimeEncoderOfLayout(loggerConf.TimeFormat),
+		EncodeLevel:    zapcore.CapitalColorLevelEncoder, // Цветной вывод уровня для консоли
+		EncodeTime:     zapcore.TimeEncoderOfLayout(params.LoggerConf.TimeFormat),
 		EncodeDuration: zapcore.StringDurationEncoder,
-		//EncodeCaller:   zapcore.ShortCallerEncoder,
+		// EncodeCaller:   zapcore.ShortCallerEncoder, // Раскомментируйте, если нужен вывод места вызова. Потребуется zap.AddCaller() и возможно zap.AddCallerSkip().
 	}
 
 	var encoder zapcore.Encoder
 
-	if !env.IsLocal() {
-		if senConf != nil {
+	if !params.Env.IsLocal() {
+		if params.SenConf != nil && params.SenConf.Key != "" && params.SenConf.Host != "" {
+			// Sentry DSN формат: "https://<key>@<host>/<project_id>"
+			// Убедитесь, что params.SenConf.Host это домен (например, sentry.example.com)
+			// и если нужен ID проекта, он должен быть частью Host или добавлен отдельно.
+			// Текущая строка: fmt.Sprintf("https://%s@%s", params.SenConf.Key, params.SenConf.Host)
+			// может потребовать корректировки в зависимости от вашей конфигурации Sentry.
 			err := sentry.Init(sentry.ClientOptions{
-				Dsn:              fmt.Sprintf("https://%v@%v", senConf.Key, senConf.Host),
-				TracesSampleRate: 1.0,
-				Debug:            true,
-				Environment:      env.String(),
+				Dsn:              fmt.Sprintf("https://%s@%s", params.SenConf.Key, params.SenConf.Host),
+				TracesSampleRate: 1.0,                  // Отправлять 100% трейсов, настройте по необходимости
+				Debug:            params.Env.IsLocal(), // Включать Debug для Sentry только в локальном окружении
+				Environment:      params.Env.String(),
+				Release:          fmt.Sprintf("%s@%s", params.AppConf.Name, params.AppConf.Version),
 			})
 
 			if err != nil {
-				panic("Ошибка инициализации Sentry: " + err.Error())
+				// Вместо паники можно логировать ошибку стандартным логгером и продолжить без Sentry
+				fmt.Fprintf(os.Stderr, "Ошибка инициализации Sentry: %v\n", err)
+				// panic("Ошибка инициализации Sentry: " + err.Error()) // Или оставить панику, если Sentry критичен
 			}
 		}
+		encoderConfig.EncodeLevel = zapcore.CapitalLevelEncoder // Для JSON логов цвета не нужны
 		encoder = zapcore.NewJSONEncoder(encoderConfig)
 	} else {
-		encoder = zapcore.NewConsoleEncoder(encoderConfig)
+		encoder = zapcore.NewConsoleEncoder(encoderConfig) // Цветной вывод для локальной консоли
 	}
 
 	var cores []zapcore.Core
 
-	if loggerConf.EnableConsole {
+	if params.LoggerConf.EnableConsole {
 		consoleWriter := zapcore.Lock(os.Stdout)
-		cores = append(cores, zapcore.NewCore(encoder, consoleWriter, zapcore.Level(loggerConf.ConsoleLevel)))
+		cores = append(cores, zapcore.NewCore(encoder, consoleWriter, zapcore.Level(params.LoggerConf.ConsoleLevel)))
 	}
 
-	if loggerConf.EnableFile {
-		rotationTime, err := time.ParseDuration(loggerConf.RotationTime)
+	if params.LoggerConf.EnableFile {
+		rotationTime, err := time.ParseDuration(params.LoggerConf.RotationTime)
 		if err != nil {
-			panic("Invalid rotation time: " + err.Error())
+			panic("Некорректное время ротации (RotationTime): " + err.Error() + ". Используйте формат вроде '24h', '5m'.")
 		}
+
+		// Имя файла для lumberjack. Lumberjack будет ротировать этот файл.
+		// Если fileName включает дату, то каждый день будет создаваться новый *базовый* файл,
+		// и lumberjack будет ротировать уже его.
+		// TimeRotatingWriter затем будет принудительно ротировать этот файл по времени.
+		// Если нужен один непрерывный лог-файл, ротируемый по времени и размеру,
+		// то дата в fileName может быть избыточной.
+		// Текущая реализация fileName создает новый файл каждый день.
+		logFilePath := filepath.Join(params.LoggerConf.Dir, fileName(params.AppConf.Name, params.AppConf.Version))
 
 		lumberjackLogger := &lumberjack.Logger{
-			Filename:   filepath.Join(loggerConf.Dir, fileName(appConf.Name, appConf.Version)),
-			MaxSize:    loggerConf.MaxSize, // megabytes
-			MaxBackups: loggerConf.MaxBackups,
-			MaxAge:     loggerConf.MaxAge, // days
-			Compress:   loggerConf.Compress,
+			Filename:   logFilePath,
+			MaxSize:    params.LoggerConf.MaxSize, // в мегабайтах
+			MaxBackups: params.LoggerConf.MaxBackups,
+			MaxAge:     params.LoggerConf.MaxAge, // в днях
+			Compress:   params.LoggerConf.Compress,
 		}
 
-		timeRotatingWriter := NewTimeRotatingWriter(lumberjackLogger, rotationTime)
-		fileWriter := zapcore.AddSync(timeRotatingWriter)
-		cores = append(cores, zapcore.NewCore(encoder, fileWriter, zapcore.Level(loggerConf.FileLevel)))
+		var writer zapcore.WriteSyncer
+		if rotationTime > 0 {
+			timeRotatingWriter := NewTimeRotatingWriter(lumberjackLogger, rotationTime)
+			writer = zapcore.AddSync(timeRotatingWriter)
+		} else {
+			writer = zapcore.AddSync(lumberjackLogger) // Используем только lumberjack если rotationTime не задан (или 0)
+		}
+		cores = append(cores, zapcore.NewCore(encoder, writer, zapcore.Level(params.LoggerConf.FileLevel)))
 	}
 
-	// Объединяем выводы
+	if len(cores) == 0 {
+		// Если не включен ни консольный, ни файловый вывод, логирование не будет работать.
+		// Можно либо запаниковать, либо по умолчанию включить консольный вывод.
+		// Здесь мы создадим Nop-логгер, чтобы приложение не падало, но логи не писались.
+		// Либо можно добавить ядро по умолчанию:
+		// consoleWriter := zapcore.Lock(os.Stdout)
+		// cores = append(cores, zapcore.NewCore(encoder, consoleWriter, zapcore.InfoLevel))
+		// fmt.Fprintln(os.Stderr, "Внимание: логирование не настроено (ни консоль, ни файл), используется NopLogger.")
+		// return NewNopLogger()
+		// Пока оставим панику, если нет ядер, это явная ошибка конфигурации.
+		if !params.LoggerConf.EnableConsole && !params.LoggerConf.EnableFile {
+			panic("logger: не включен ни консольный, ни файловый вывод логов.")
+		}
+	}
+
 	core := zapcore.NewTee(cores...)
 
-	// Создаем логгер
-	logger := zap.New(core, zap.AddStacktrace(zapcore.ErrorLevel))
+	// zap.AddCaller() - добавляет информацию о файле и строке вызова.
+	// zap.AddCallerSkip(1) - если обертка логгера состоит из одного уровня,
+	// нужно пропустить 1 уровень стека, чтобы показать реальное место вызова.
+	// Настройте skipCount, если у вас несколько уровней оберток.
+	// logger := zap.New(core, zap.AddStacktrace(zapcore.ErrorLevel), zap.AddCaller(), zap.AddCallerSkip(1))
+	logger := zap.New(core, zap.AddStacktrace(zapcore.ErrorLevel)) // Добавляем AddCaller и AddCallerSkip при необходимости
 
-	// Добавляем дополнительные поля
+	// Добавляем стандартные поля
 	fields := []zap.Field{
-		zap.String("appName", appConf.Name),
-		zap.String("appVersion", appConf.Version),
+		zap.String("appName", params.AppConf.Name),
+		zap.String("appVersion", params.AppConf.Version),
+		// Можно использовать zap.Namespace для группировки:
+		// zap.Namespace("app"),
+		// zap.String("name", params.AppConf.Name),
+		// zap.String("version", params.AppConf.Version),
 	}
 
 	logger = logger.With(fields...)
@@ -114,202 +188,218 @@ func MustNewLogger(appConf *configo.App, loggerConf *configo.Logger, senConf *co
 	return &logIt{logger: logger}
 }
 
+// NewNopLogger создает логгер, который ничего не делает. Полезен для тестов.
 func NewNopLogger() Logger {
 	nopCore := zapcore.NewNopCore()
 	nopLogger := zap.New(nopCore)
 	return &logIt{logger: nopLogger}
 }
 
-// Debug - логирование отладочной информации
-func (receiver *logIt) Debug(fields ...interface{}) {
-	builder := strings.Builder{}
-	builder.WriteString("\n")
+// Debug - логирование отладочной информации (структурированное)
+func (l *logIt) Debug(ctx context.Context, message string, fields ...zap.Field) {
+	op := l.getOpFromContext(ctx)
+	traceID := l.getTraceIDFromContext(ctx)
+	allFields := append([]zap.Field{
+		zap.String(string(opKey), op),
+		zap.String(string(traceIDKey), traceID),
+	}, fields...)
+	l.logger.Debug(message, allFields...)
+}
 
-	//debugTime := time.Now().Format("2006-01-02 15:04:05")
-	//builder.WriteString(fmt.Sprintf("[DEBUG] %s\n", debugTime))
+func (l *logIt) Info(ctx context.Context, message string, fields ...zap.Field) {
+	op := l.getOpFromContext(ctx)
+	traceID := l.getTraceIDFromContext(ctx)
+	l.logger.Info(
+		message,
+		append([]zap.Field{
+			zap.String(string(opKey), op),
+			zap.String(string(traceIDKey), traceID),
+		}, fields...)...,
+	)
+}
 
-	for i, field := range fields {
-		switch v := field.(type) {
-		case string:
-			builder.WriteString(fmt.Sprintf("Поле %d: %s\n", i, v))
-		case int, int32, int64:
-			builder.WriteString(fmt.Sprintf("Поле %d: %d\n", i, v))
-		case float32, float64:
-			builder.WriteString(fmt.Sprintf("Поле %d: %f\n", i, v))
-		case bool:
-			builder.WriteString(fmt.Sprintf("Поле %d: %t\n", i, v))
-		case error:
-			builder.WriteString(fmt.Sprintf("Поле %d (ошибка): %s\n", i, v.Error()))
-		default:
-			builder.WriteString(fmt.Sprintf("Поле %d: %+v\n", i, v))
+func (l *logIt) Infof(ctx context.Context, message string, a ...any) {
+	op := l.getOpFromContext(ctx)
+	traceID := l.getTraceIDFromContext(ctx)
+	l.logger.Info(
+		fmt.Sprintf(message, a...),
+		zap.String(string(opKey), op),
+		zap.String(string(traceIDKey), traceID),
+	)
+}
+
+func (l *logIt) Warn(ctx context.Context, message string, fields ...zap.Field) {
+	op := l.getOpFromContext(ctx)
+	traceID := l.getTraceIDFromContext(ctx)
+	l.logger.Warn(
+		message,
+		append([]zap.Field{
+			zap.String(string(opKey), op),
+			zap.String(string(traceIDKey), traceID),
+		}, fields...)...,
+	)
+}
+
+func (l *logIt) Warnf(ctx context.Context, message string, a ...any) {
+	op := l.getOpFromContext(ctx)
+	traceID := l.getTraceIDFromContext(ctx)
+	l.logger.Warn(
+		fmt.Sprintf(message, a...),
+		zap.String(string(opKey), op),
+		zap.String(string(traceIDKey), traceID),
+	)
+}
+
+func (l *logIt) Error(ctx context.Context, err error, fields ...zap.Field) {
+	op := l.getOpFromContext(ctx)
+	traceID := l.getTraceIDFromContext(ctx)
+	// Добавляем само сообщение об ошибке как поле, если его нет в fields
+	// Zap автоматически добавляет стектрейс для ErrorLevel и выше, если настроено AddStacktrace.
+	l.logger.Error(
+		err.Error(), // Сообщение ошибки
+		append([]zap.Field{
+			zap.String(string(opKey), op),
+			zap.String(string(traceIDKey), traceID),
+			zap.Error(err), // Добавляем саму ошибку как структурированное поле
+		}, fields...)...,
+	)
+	sentry.CaptureException(err) // Отправляем ошибку в Sentry
+}
+
+func (l *logIt) Errorf(ctx context.Context, format string, args ...interface{}) {
+	op := l.getOpFromContext(ctx)
+	traceID := l.getTraceIDFromContext(ctx)
+	err := fmt.Errorf(format, args...)
+	l.logger.Error(
+		err.Error(),
+		zap.String(string(opKey), op),
+		zap.String(string(traceIDKey), traceID),
+		zap.Error(err),
+	)
+	sentry.CaptureException(err)
+}
+
+func (l *logIt) Fatal(ctx context.Context, err error, fields ...zap.Field) {
+	op := l.getOpFromContext(ctx)
+	traceID := l.getTraceIDFromContext(ctx)
+	l.logger.Fatal(
+		err.Error(),
+		append([]zap.Field{
+			zap.String(string(opKey), op),
+			zap.String(string(traceIDKey), traceID),
+			zap.Error(err),
+		}, fields...)...,
+	)
+	// Sentry.CaptureException(err) здесь не нужен, т.к. Fatal завершит программу,
+	// и Sentry SDK обычно перехватывает паники/фатальные ошибки, если настроен.
+	// Однако, для явности или если есть специфические требования к flush Sentry перед выходом,
+	// можно оставить или использовать sentry.Flush().
+	// sentry.CaptureException(err)
+	// sentry.Flush(2 * time.Second) // Дать Sentry время на отправку
+}
+
+func (l *logIt) Fatalf(ctx context.Context, format string, args ...interface{}) {
+	op := l.getOpFromContext(ctx)
+	traceID := l.getTraceIDFromContext(ctx)
+	err := fmt.Errorf(format, args...)
+	l.logger.Fatal(
+		err.Error(),
+		zap.String(string(opKey), op),
+		zap.String(string(traceIDKey), traceID),
+		zap.Error(err),
+	)
+	// sentry.CaptureException(err)
+	// sentry.Flush(2 * time.Second)
+}
+
+// NewCtx создает новый контекст с указанной операцией и traceId.
+// Если ctx равен nil, используется context.Background().
+func (l *logIt) NewCtx(ctx context.Context, op string, traceID *string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var currentTraceID string
+	if traceID != nil {
+		currentTraceID = *traceID
+	} else {
+		// Если traceId не был передан, попытаемся извлечь его из существующего контекста
+		existingTraceID, ok := ctx.Value(traceIDKey).(string)
+		if ok && existingTraceID != "" {
+			currentTraceID = existingTraceID
+		} else {
+			currentTraceID = uuid.New().String() // Генерируем новый, если нет
 		}
 	}
-
-	builder.WriteString("\n")
-
-	receiver.logger.Debug(builder.String())
+	ctx = context.WithValue(ctx, opKey, op)
+	return context.WithValue(ctx, traceIDKey, currentTraceID)
 }
 
-func (receiver *logIt) Info(ctx context.Context, message string, fields ...zap.Field) {
-	op := receiver.getOpFromContext(ctx)
-	traceId := receiver.getTraceIdFromContext(ctx)
-	receiver.logger.Info(
-		message,
-		append([]zap.Field{
-			zap.String("op", op),
-			zap.String("traceId", traceId),
-		}, fields...)...,
-	)
-}
-
-func (receiver *logIt) Infof(ctx context.Context, message string, a ...any) {
-	op := receiver.getOpFromContext(ctx)
-	traceId := receiver.getTraceIdFromContext(ctx)
-	receiver.logger.Info(
-		fmt.Sprintf(message, a...),
-		append([]zap.Field{
-			zap.String("op", op),
-			zap.String("traceId", traceId),
-		})...,
-	)
-}
-
-// Warn - логирование предупреждений
-func (receiver *logIt) Warn(ctx context.Context, message string, fields ...zap.Field) {
-	op := receiver.getOpFromContext(ctx)
-	traceId := receiver.getTraceIdFromContext(ctx)
-	receiver.logger.Warn(
-		message,
-		append([]zap.Field{
-			zap.String("op", op),
-			zap.String("traceId", traceId),
-		}, fields...)...,
-	)
-}
-
-func (receiver *logIt) Warnf(ctx context.Context, message string, a ...any) {
-	op := receiver.getOpFromContext(ctx)
-	traceId := receiver.getTraceIdFromContext(ctx)
-	receiver.logger.Warn(
-		fmt.Sprintf(message, a...),
-		append([]zap.Field{
-			zap.String("op", op),
-			zap.String("traceId", traceId),
-		})...,
-	)
-}
-
-// Error - логирование ошибок
-func (receiver *logIt) Error(ctx context.Context, err error, fields ...zap.Field) {
-	op := receiver.getOpFromContext(ctx)
-	traceId := receiver.getTraceIdFromContext(ctx)
-	receiver.logger.Error(
-		err.Error(),
-		append([]zap.Field{
-			zap.String("op", op),
-			zap.String("traceId", traceId),
-		}, fields...)...,
-	)
-	sentry.CaptureException(err)
-}
-
-func (receiver *logIt) Errorf(ctx context.Context, format string, args ...interface{}) {
-	op := receiver.getOpFromContext(ctx)
-	traceId := receiver.getTraceIdFromContext(ctx)
-
-	err := fmt.Errorf(format, args...)
-
-	receiver.logger.Error(
-		err.Error(),
-		[]zap.Field{
-			zap.String("op", op),
-			zap.String("traceId", traceId),
-		}...,
-	)
-
-	sentry.CaptureException(err)
-}
-
-// Fatal - логирование критических ошибок, завершает приложение
-func (receiver *logIt) Fatal(ctx context.Context, err error, fields ...zap.Field) {
-	op := receiver.getOpFromContext(ctx)
-	traceId := receiver.getTraceIdFromContext(ctx)
-	receiver.logger.Fatal(
-		err.Error(),
-		append([]zap.Field{
-			zap.String("op", op),
-			zap.String("traceId", traceId),
-		}, fields...)...,
-	)
-	sentry.CaptureException(err)
-}
-
-func (receiver *logIt) Fatalf(ctx context.Context, format string, args ...interface{}) {
-	op := receiver.getOpFromContext(ctx)
-	traceId := receiver.getTraceIdFromContext(ctx)
-
-	err := fmt.Errorf(format, args...)
-
-	receiver.logger.Fatal(
-		err.Error(),
-		[]zap.Field{
-			zap.String("op", op),
-			zap.String("traceId", traceId),
-		}...,
-	)
-
-	sentry.CaptureException(err)
-}
-
-// NewCtx создает новый контекст с указанной операцией и traceId
-func (receiver *logIt) NewCtx(ctx context.Context, op string, traceId *string) context.Context {
-	if traceId == nil {
-		newTraceId := uuid.New().String()
-		traceId = &newTraceId
+// NewOpCtx создает новый контекст с указанной операцией.
+// Если ctx равен nil, используется context.Background().
+func (l *logIt) NewOpCtx(ctx context.Context, op string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	ctx = context.WithValue(ctx, "op", op)
-	return context.WithValue(ctx, "traceId", *traceId)
+	return context.WithValue(ctx, opKey, op)
 }
 
-// NewOpCtx создает новый контекст с указанной операции
-func (receiver *logIt) NewOpCtx(ctx context.Context, op string) context.Context {
-	return context.WithValue(ctx, "op", op)
-}
-
-// NewTraceCtx создает новый контекст с указанным traceId
-func (receiver *logIt) NewTraceCtx(ctx context.Context, traceId *string) context.Context {
-	if traceId == nil {
-		newTraceId := uuid.New().String()
-		traceId = &newTraceId
+// NewTraceCtx создает новый контекст с указанным traceId.
+// Если ctx равен nil, используется context.Background().
+// Если traceID равен nil, генерируется новый UUID.
+func (l *logIt) NewTraceCtx(ctx context.Context, traceID *string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return context.WithValue(ctx, "traceId", *traceId)
+	var currentTraceID string
+	if traceID != nil {
+		currentTraceID = *traceID
+	} else {
+		currentTraceID = uuid.New().String()
+	}
+	return context.WithValue(ctx, traceIDKey, currentTraceID)
 }
 
-// getOpFromContext извлекает операцию из контекста
-func (receiver *logIt) getOpFromContext(ctx context.Context) string {
-	if op, ok := ctx.Value("op").(string); ok {
+// NewTraceContext создает новый корневой контекст с указанным traceId.
+// Если traceID равен nil, генерируется новый UUID.
+func (l *logIt) NewTraceContext(traceID *string) context.Context {
+	var currentTraceID string
+	if traceID != nil {
+		currentTraceID = *traceID
+	} else {
+		currentTraceID = uuid.New().String()
+	}
+	return context.WithValue(context.Background(), traceIDKey, currentTraceID)
+}
+
+// getOpFromContext извлекает операцию (op) из контекста.
+func (l *logIt) getOpFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return "unknown_op_nil_context"
+	}
+	if op, ok := ctx.Value(opKey).(string); ok {
 		return op
 	}
-	return "unknown"
+	return "unknown_op"
 }
 
-// getTraceIdFromContext извлекает traceId из контекста
-func (receiver *logIt) getTraceIdFromContext(ctx context.Context) string {
-	if traceId, ok := ctx.Value("traceId").(string); ok {
-		return traceId
+// getTraceIDFromContext извлекает идентификатор трассировки (traceId) из контекста.
+// Если traceId не найден, генерируется новый UUID.
+func (l *logIt) getTraceIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return uuid.New().String() // Генерируем новый для nil контекста
 	}
-	return uuid.New().String()
-}
-
-func (receiver *logIt) NewTraceContext(traceId *string) context.Context {
-	if traceId == nil {
-		newTraceId := uuid.New().String()
-		traceId = &newTraceId
+	if traceID, ok := ctx.Value(traceIDKey).(string); ok {
+		return traceID
 	}
-	return context.WithValue(context.Background(), "traceId", *traceId)
+	return uuid.New().String() // Генерируем новый, если не найден
 }
 
+// fileName генерирует имя файла лога на основе имени приложения, версии и текущей даты.
+// Формат: appName_appVersion_YYYY-MM-DD.log
 func fileName(appName, appVersion string) string {
+	// Замените недопустимые символы в имени и версии, если они могут там быть
+	safeAppName := strings.ReplaceAll(appName, "/", "_")
+	safeAppVersion := strings.ReplaceAll(appVersion, "/", "_")
 	currentDate := time.Now().Format("2006-01-02")
-	return fmt.Sprintf("%s_%s_%s.log", appName, appVersion, currentDate)
+	return fmt.Sprintf("%s_%s_%s.log", safeAppName, safeAppVersion, currentDate)
 }

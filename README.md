@@ -87,39 +87,69 @@ logger := logit.NewNopLogger()
 #### Env конфигурация (envo.Env):
 - Объект, представляющий текущее окружение
 
-Пример конфигурации:
-##### Go
+## Использование
+### Инициализация 
 ```go
-appConf := &configo.App{
-    Name:    "MyApp",
-    Version: "1.0.0",
+import (
+    "context"
+    "https://github.com/x3a-tech/logit-go"
+    "https://github.com/x3a-tech/configo"
+    "go.uber.org/zap" // Для zap.Field, если нужно
+)
+
+func main() {
+    // Базовый контекст
+    ctx := context.Background()
+
+    // Пример конфигурации (заполните своими значениями)
+    appConf := &configo.App{
+        Name:    "MyApp",
+        Version: "1.0.0",
+    }
+    loggerConf := &configo.Logger{
+        EnableConsole: true,
+        ConsoleLevel:  int(zapcore.DebugLevel), // или используйте числовые значения
+        EnableFile:    true,
+        FileLevel:     int(zapcore.InfoLevel),
+        Dir:           "logs",
+        MaxSize:       100,
+        MaxBackups:    3,
+        MaxAge:        28,
+        Compress:      true,
+        TimeFormat:    "2006-01-02 15:04:05",
+        RotationTime:  "24h", // Например, "24h", "1h30m". Убедитесь, что формат корректен.
+    }
+    senConf := &configo.Sentry{ // Опционально
+        Key:  "your-sentry-key",
+        Host: "your-sentry-host.example.com", // Например, oXXXXXX.ingest.sentry.io (без https://)
+    }
+
+    // Инициализация логгера
+    loggerParams := &logit.Params{
+        AppConf:    appConf,
+        LoggerConf: loggerConf,
+        SenConf:    senConf, // может быть nil, если Sentry не используется
+        Env:        env,
+    }
+    logger := logit.MustNewLogger(loggerParams)
+
+    // Установка операции и traceId в контекст
+    // Устанавливаем имя операции
+    ctx = logger.NewOpCtx(ctx, "main.startup")
+
+    // Если traceId уже есть (например, из входящего запроса):
+    // incomingTraceId := "abc-123-xyz-789"
+    // ctx = logger.NewTraceCtx(ctx, &incomingTraceId)
+    // Если traceId нужно сгенерировать:
+    ctx = logger.NewTraceCtx(ctx, nil) // nil сгенерирует новый traceId
+
+    // Использование логгера
+    logger.Info(ctx, "Приложение успешно запущено", zap.String("component", "main"))
+    logger.Debug(ctx, "Это отладочное сообщение с дополнительными полями", zap.Int("userID", 123))
 }
-
-loggerConf := &configo.Logger{
-    EnableConsole: true,
-    ConsoleLevel:  int(zapcore.InfoLevel),
-    EnableFile:    true,
-    FileLevel:     int(zapcore.DebugLevel),
-    Dir:           "/var/log/myapp",
-    MaxSize:       100,
-    MaxBackups:    3,
-    MaxAge:        28,
-    Compress:      true,
-    TimeFormat:    "2006-01-02 15:04:05",
-    RotationTime:  "24h",
-}
-
-senConf := &configo.Sentry{
-    Key:  "your-sentry-key",
-    Host: "sentry.io",
-}
-
-env := envo.New()
-
-logger := logit.MustNewLogger(appConf, loggerConf, senConf, env)
 ```
 
-Yaml
+## Config
 
 ```yaml
 app:
